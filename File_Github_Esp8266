@@ -1,0 +1,132 @@
+#define BLYNK_TEMPLATE_ID "TMPL6xxxxxxxx"
+#define BLYNK_TEMPLATE_NAME "Smart Irrigation"
+#define BLYNK_AUTH_TOKEN "your_token_here"
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <DHT.h>
+
+// WiFi
+char ssid[] = "Your_WiFi";
+char pass[] = "Your_Password";
+
+// Pin Setup
+#define SOIL_PIN A0       // Sensor tanah
+#define DHT_PIN D2        // DHT22
+#define PUMP_PIN D3       // Pompa/LED
+#define BUZZER_PIN D4     // Buzzer
+
+// DHT Setup
+DHT dht(DHT_PIN, DHT22);
+
+// Variables
+int soilValue = 0;
+float temp = 0;
+float humid = 0;
+bool isPumping = false;
+bool autoMode = true;
+
+// Timer
+BlynkTimer timer;
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Pin setup
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN, LOW);
+  
+  // Start DHT
+  dht.begin();
+  
+  // Connect to Blynk
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  
+  // Timer - baca sensor setiap 3 detik
+  timer.setInterval(3000L, readSensors);
+  
+  Serial.println("Smart Irrigation Ready!");
+  beep(2); // Startup sound
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+  
+  // Auto watering
+  if (autoMode && soilValue < 300 && !isPumping) {
+    startPump();
+  }
+  
+  // Stop pump after 5 seconds
+  static unsigned long pumpStart = 0;
+  if (isPumping) {
+    if (millis() - pumpStart > 5000) {
+      stopPump();
+    }
+  } else {
+    pumpStart = millis();
+  }
+}
+
+void readSensors() {
+  // Read soil moisture (0-1023, lower = more wet)
+  soilValue = analogRead(SOIL_PIN);
+  int soilPercent = map(soilValue, 0, 1023, 100, 0);
+  
+  // Read DHT22
+  temp = dht.readTemperature();
+  humid = dht.readHumidity();
+  
+  // Send to Blynk
+  Blynk.virtualWrite(V0, soilPercent);    // Soil %
+  Blynk.virtualWrite(V1, temp);           // Temperature
+  Blynk.virtualWrite(V2, humid);          // Humidity  
+  Blynk.virtualWrite(V3, isPumping ? 1 : 0); // Pump status
+  
+  // Print to Serial
+  Serial.println("Soil: " + String(soilPercent) + "%");
+  Serial.println("Temp: " + String(temp) + "°C");
+  Serial.println("Humidity: " + String(humid) + "%");
+  Serial.println("Pump: " + String(isPumping ? "ON" : "OFF"));
+  Serial.println("---");
+  
+  // Warning if very dry
+  if (soilValue < 200) {
+    beep(3);
+  }
+}
+
+void startPump() {
+  isPumping = true;
+  digitalWrite(PUMP_PIN, HIGH);
+  Serial.println(">>> PUMP ON <<<");
+  beep(1);
+}
+
+void stopPump() {
+  isPumping = false;
+  digitalWrite(PUMP_PIN, LOW);
+  Serial.println(">>> PUMP OFF <<<");
+  beep(2);
+}
+
+void beep(int times) {
+  for (int i = 0; i < times; i++) {
+    tone(BUZZER_PIN, 1000, 200);
+    delay(300);
+  }
+}
+
+// Blynk Controls
+BLYNK_WRITE(V4) { // Auto Mode Switch
+  autoMode = param.asInt();
+  Serial.println("Auto Mode: " + String(autoMode ? "ON" : "OFF"));
+}
+
+BLYNK_WRITE(V5) { // Manual Water Button
+  if (param.asInt() && !autoMode && !isPumping) {
+    startPump();
+  }
+}

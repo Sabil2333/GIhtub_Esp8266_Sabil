@@ -4,39 +4,31 @@
 
 #define TANAH A0      
 #define SUHU 2        
-#define SERVO 9       
-#define LED_POMPA 13  
-#define LED_HIDUP 12  
+#define SERVO 9      
+#define LED 13  
 #define BUZZER 8      
 
 DHT dht(SUHU, DHT22);
 Servo valve;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-int KERING = 300;     
-int BASAH = 600;      
-int LAMA_SIRAM = 5000; 
-
-unsigned long waktu_cek = 0;
-unsigned long waktu_mulai_siram = 0;
+int KERING = 300;    
+int LAMA_SIRAM = 5000;
+unsigned long waktu_siram = 0;
 bool sedang_siram = false;
 
 void setup() {
-  
   Serial.begin(9600);
-  Serial.println("Sistem Siram Otomatis Dimulai!");
+  Serial.println("Sistem Siram Otomatis");
   
-  
-  pinMode(LED_POMPA, OUTPUT);
-  pinMode(LED_HIDUP, OUTPUT);
+  pinMode(LED, OUTPUT);
   pinMode(BUZZER, OUTPUT);
-  
   
   dht.begin();
   valve.attach(SERVO);
-  valve.write(0); 
+  valve.write(0);
   
-  
+  // Inisialisasi LCD
   lcd.init();
   lcd.backlight();
   lcd.print("SISTEM SIRAM");
@@ -45,155 +37,99 @@ void setup() {
   delay(2000);
   lcd.clear();
   
-  digitalWrite(LED_HIDUP, HIGH); 
-  
-  
-  bunyi_startup();
+  // Bunyi startup
+  tone(BUZZER, 1000, 200);
+  delay(1000);
 }
 
 void loop() {
-  
-  if (millis() - waktu_cek > 2000) {
-    cek_tanah();
-    waktu_cek = millis();
-  }
-  
-  
-  if (sedang_siram) {
-    cek_stop_siram();
-  }
-  
-  
-  blink_led();
-  
-  delay(100);
-}
-
-void cek_tanah() {
-  
   int nilai_tanah = analogRead(TANAH);
   int persen = map(nilai_tanah, 0, 1023, 100, 0);
   
-  
+  // Baca DHT sensor
   float suhu = dht.readTemperature();
   float kelembaban = dht.readHumidity();
   
-  
-  Serial.print("Kelembaban Tanah: ");
+  // Tampilkan status di Serial
+  Serial.print("Tanah: ");
   Serial.print(persen);
+  Serial.print("% | Suhu: ");
+  Serial.print(suhu);
+  Serial.print("°C | Udara: ");
+  Serial.print(kelembaban);
   Serial.print("% - ");
   
-  
+  // Cek kondisi tanah
   if (nilai_tanah < KERING && !sedang_siram) {
     mulai_siram();
+  } else if (sedang_siram && (millis() - waktu_siram >= LAMA_SIRAM)) {
+    stop_siram();
+  }
+  
+  // Status
+  if (sedang_siram) {
+    Serial.println("SIRAM");
+    digitalWrite(LED, HIGH);
   } else {
-    if (nilai_tanah > BASAH) {
-      Serial.println("BASAH");
+    Serial.println(nilai_tanah < KERING ? "KERING" : "NORMAL");
+    digitalWrite(LED, LOW);
+  }
+  
+  // Update LCD dengan tampilan bergantian
+  static bool tampil_dht = false;
+  lcd.clear();
+  
+  if (tampil_dht) {
+    // Tampilkan data DHT
+    lcd.setCursor(0, 0);
+    lcd.print("Suhu: ");
+    if (!isnan(suhu)) {
+      lcd.print(suhu, 1);
+      lcd.print("C");
     } else {
-      Serial.println("NORMAL");
+      lcd.print("Error");
+    }
+    
+    lcd.setCursor(0, 1);
+    lcd.print("Udara: ");
+    if (!isnan(kelembaban)) {
+      lcd.print(kelembaban, 1);
+      lcd.print("%");
+    } else {
+      lcd.print("Error");
+    }
+  } else {
+    // Tampilkan data tanah dan status
+    lcd.setCursor(0, 0);
+    lcd.print("Tanah: ");
+    lcd.print(persen);
+    lcd.print("%");
+    
+    lcd.setCursor(0, 1);
+    if (sedang_siram) {
+      lcd.print("Status: SIRAM");
+    } else if (nilai_tanah < KERING) {
+      lcd.print("Status: KERING");
+    } else {
+      lcd.print("Status: NORMAL");
     }
   }
   
-  
-  if (!isnan(suhu) && !isnan(kelembaban)) {
-    Serial.print("Suhu: ");
-    Serial.print(suhu);
-    Serial.print("°C, Udara: ");
-    Serial.print(kelembaban);
-    Serial.println("%");
-  }
-  
- 
-  update_lcd(persen, nilai_tanah);
-}
-
-void update_lcd(int persen, int nilai) {
-  lcd.clear();
-  
-  lcd.setCursor(0, 0);
-  lcd.print("Tanah: ");
-  lcd.print(persen);
-  lcd.print("%");
-  
-  lcd.setCursor(0, 1);
-  lcd.print("Status: ");
-  
-  if (sedang_siram) {
-    lcd.print("SIRAM");
-  } else if (nilai < KERING) {
-    lcd.print("Kering");
-  } else if (nilai > BASAH) {
-    lcd.print("Basah");
-  } else {
-    lcd.print("Normal");
-  }
+  tampil_dht = !tampil_dht; // Toggle tampilan
+  delay(3000);
 }
 
 void mulai_siram() {
   Serial.println(">> MULAI SIRAM <<");
-  
   sedang_siram = true;
-  waktu_mulai_siram = millis();
-  
-  valve.write(90);              
-  digitalWrite(LED_POMPA, HIGH); 
-  
-  
-  bunyi_mulai_siram();
+  waktu_siram = millis();
+  valve.write(90);
+  tone(BUZZER, 800, 500);
 }
 
 void stop_siram() {
   Serial.println(">> SELESAI SIRAM <<");
-  
   sedang_siram = false;
-  
-  valve.write(0);               
-  digitalWrite(LED_POMPA, LOW); 
-  
-
-  bunyi_selesai_siram();
-}
-
-void cek_stop_siram() {
-  unsigned long sudah_siram = millis() - waktu_mulai_siram;
-  int nilai_tanah = analogRead(TANAH);
-  
-  
-  if (sudah_siram >= LAMA_SIRAM || nilai_tanah > BASAH) {
-    stop_siram();
-  }
-}
-
-void blink_led() {
-  static bool led_nyala = false;
-  static unsigned long waktu_blink = 0;
-  
-  if (millis() - waktu_blink >= 1000) {
-    led_nyala = !led_nyala;
-    digitalWrite(LED_HIDUP, led_nyala);
-    waktu_blink = millis();
-  }
-}
-
-void bunyi_startup() {
-  tone(BUZZER, 1000, 200);  
-  delay(250);
-  tone(BUZZER, 1500, 200);  
-  delay(250);
-  tone(BUZZER, 2000, 300);  
-}
-
-void bunyi_mulai_siram() {
-  for (int i = 0; i < 3; i++) {
-    tone(BUZZER, 800, 100);   
-    delay(150);
-  }
-}
-
-void bunyi_selesai_siram() {
-  tone(BUZZER, 1200, 150);
-  delay(200);
-  tone(BUZZER, 1000, 150);
-  delay(200);
-  tone(BUZZER, 800, 300);   
+  valve.write(0);
+  tone(BUZZER, 1200, 300);
 }

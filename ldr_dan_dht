@@ -1,0 +1,73 @@
+#define BLYNK_TEMPLATE_ID "TMPL6JXwsh1A6"
+#define BLYNK_TEMPLATE_NAME "UAP"
+#define BLYNK_AUTH_TOKEN "ECh7J1b40JxVPakJVpDdP2qKekEtwSwn"
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <DHT.h>
+
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "Wokwi-GUEST";
+char pass[] = "";
+
+#define DHT_PIN D2
+#define LDR_PIN A0
+#define LED_PIN D4
+#define BUZZER_PIN D5
+
+DHT dht(DHT_PIN, DHT22);
+float temp, humid, light;
+bool alert = false;
+
+int tempMin = 20, tempMax = 35, humidMin = 40, lightMin = 30;
+unsigned long lastRead = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT); pinMode(BUZZER_PIN, OUTPUT);
+  dht.begin();
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Blynk.begin(auth, ssid, pass);
+  digitalWrite(LED_PIN, HIGH);
+}
+
+void loop() {
+  Blynk.run();
+  if (millis() - lastRead > 3000) {
+    readSensors(); sendToBlynk(); checkAlerts();
+    lastRead = millis();
+  }
+}
+
+void readSensors() {
+  temp = dht.readTemperature();
+  humid = dht.readHumidity();
+  int raw = analogRead(LDR_PIN);
+  light = map(raw, 0, 1024, 0, 100);
+  if (isnan(temp)) temp = 0;
+  if (isnan(humid)) humid = 0;
+}
+
+void sendToBlynk() {
+  Blynk.virtualWrite(V0, temp);
+  Blynk.virtualWrite(V1, humid);
+  Blynk.virtualWrite(V2, light);
+  Blynk.virtualWrite(V3, alert);
+}
+
+void checkAlerts() {
+  bool t = temp < tempMin || temp > tempMax;
+  bool h = humid < humidMin;
+  bool l = light < lightMin;
+  alert = (t || h || l) && temp > 0;
+  if (alert) {
+    tone(BUZZER_PIN, 1000, 200);
+    digitalWrite(LED_PIN, LOW); delay(200); digitalWrite(LED_PIN, HIGH);
+  }
+}
+
+BLYNK_WRITE(V4) { tempMin = param.asInt(); }
+BLYNK_WRITE(V5) { tempMax = param.asInt(); }
+BLYNK_WRITE(V6) { humidMin = param.asInt(); }
+BLYNK_WRITE(V7) { lightMin = param.asInt(); }

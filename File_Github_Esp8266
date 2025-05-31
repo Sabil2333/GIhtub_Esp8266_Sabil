@@ -2,223 +2,232 @@
 #define BLYNK_TEMPLATE_NAME "UAP"
 #define BLYNK_AUTH_TOKEN "ECh7J1b40JxVPakJVpDdP2qKekEtwSwn"
 
-#include <WiFi.h>
-#include <BlynkSimpleEsp32.h>
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
 #include <DHT.h>
-#include <ESP32Servo.h>
 
 char auth[] = BLYNK_AUTH_TOKEN;
 char ssid[] = "Wokwi-GUEST";
-char pass[] = "";  // Kosongkan password
+char pass[] = "";  // Kosongkan password untuk Wokwi
 
-// Pin Setup
-#define SOIL_PIN A0       // Sensor tanah
-#define DHT_PIN D2        // DHT22
-#define PUMP_PIN D3       // Pompa/LED
-#define BUZZER_PIN D4     // Buzzer
-#define SERVO_PIN D5      // Servo motor
+// Pin Configuration for ESP8266
+#define DHT_PIN D2         // DHT22 sensor (GPIO4)
+#define SOIL_PIN A0        // Soil moisture sensor (Analog pin)
+#define PUMP_PIN D5        // Water pump relay (GPIO14)
+#define LED_PIN D4         // Status LED (GPIO2)
 
-// DHT Setup
+// Sensor Setup
 DHT dht(DHT_PIN, DHT22);
 
-// Servo Setup
-Servo waterValve;
-
 // Variables
-int soilValue = 0;
-float temp = 0;
-float humid = 0;
-bool isPumping = false;
+float temperature, humidity, soilMoisture, lightLevel;
+bool pumpStatus = false;
 bool autoMode = true;
-bool valveOpen = false;
-int servoPosition = 0; // 0 = closed, 90 = open
+
+// Thresholds
+int soilThreshold = 30;    // Auto pump when soil < 30%
+int pumpDuration = 3000;   // Pump for 3 seconds
 
 // Timer
-BlynkTimer timer;
+unsigned long lastSensorRead = 0;
+unsigned long pumpStartTime = 0;
+bool pumpRunning = false;
+
+// Light level simulation (since ESP8266 has only 1 analog pin)
+int lightSimulation = 0;
 
 void setup() {
-  Serial.begin(9600);
- 
-  // Pin setup
-  pinMode(PUMP_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(PUMP_PIN, LOW);
+  Serial.begin(115200);
   
-  // Servo setup
-  waterValve.attach(SERVO_PIN);
-  waterValve.write(0); // Start with valve closed
-  delay(500);
- 
-  // Start DHT
+  // Initialize pins
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+  
+  // Initialize sensors
   dht.begin();
- 
-  // Connect to Blynk
-  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
- 
-  // Timer - baca sensor setiap 3 detik
-  timer.setInterval(3000L, readSensors);
- 
-  Serial.println("Smart Irrigation with Servo Ready!");
-  beep(2); // Startup sound
+  
+  Serial.println("Starting Smart Farming System...");
+  
+  // Connect to WiFi and Blynk
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+    blinkLED(2);
+  }
+  
+  Serial.println("WiFi Connected!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+  
+  Blynk.begin(auth, ssid, pass);
+  
+  Serial.println("=== Smart Farming System Ready ===");
+  digitalWrite(LED_PIN, HIGH); // System ready indicator
 }
 
 void loop() {
   Blynk.run();
-  timer.run();
- 
-  // Auto watering
-  if (autoMode && soilValue < 300 && !isPumping) {
-    startWatering();
+  
+  // Read sensors every 5 seconds
+  if (millis() - lastSensorRead > 5000) {
+    readAllSensors();
+    sendDataToBlynk();
+    printSensorData();
+    lastSensorRead = millis();
   }
- 
-  // Stop watering after 5 seconds
-  static unsigned long wateringStart = 0;
-  if (isPumping) {
-    if (millis() - wateringStart > 5000) {
-      stopWatering();
+  
+  // Auto watering logic
+  if (autoMode) {
+    autoWatering();
+  }
+  
+  // Handle pump timing
+  if (pumpRunning && (millis() - pumpStartTime > pumpDuration)) {
+    stopPump();
+  }
+  
+  delay(100);
+}
+
+void readAllSensors() {
+  // Read DHT22
+  temperature = dht.readTemperature();
+  humidity = dht.readHumidity();
+  
+  // Read soil moisture from A0 (convert to percentage)
+  int soilRaw = analogRead(SOIL_PIN);
+  soilMoisture = map(soilRaw, 0, 1024, 100, 0); // ESP8266 ADC is 10-bit (0-1024)
+  soilMoisture = constrain(soilMoisture, 0, 100);
+  
+  // Simulate light level (since we only have 1 analog pin)
+  // You can replace this with actual LDR reading if using analog multiplexer
+  lightSimulation += 5;
+  if (lightSimulation > 100) lightSimulation = 0;
+  lightLevel = lightSimulation;
+  
+  // Handle sensor errors
+  if (isnan(temperature)) temperature = 0;
+  if (isnan(humidity)) humidity = 0;
+}
+
+void sendDataToBlynk() {
+  Blynk.virtualWrite(V0, temperature);      // Temperature
+  Blynk.virtualWrite(V1, humidity);         // Humidity  
+  Blynk.virtualWrite(V2, soilMoisture);     // Soil moisture
+  Blynk.virtualWrite(V3, lightLevel);       // Light level (simulated)
+  Blynk.virtualWrite(V4, pumpStatus);       // Pump status
+  Blynk.virtualWrite(V5, autoMode);         // Auto mode status
+}
+
+void printSensorData() {
+  Serial.println("=== SMART FARM DATA ===");
+  Serial.println("Temperature: " + String(temperature) + "°C");
+  Serial.println("Humidity: " + String(humidity) + "%");
+  Serial.println("Soil Moisture: " + String(soilMoisture) + "%");
+  Serial.println("Light Level: " + String(lightLevel) + "% (simulated)");
+  Serial.println("Pump: " + String(pumpStatus ? "ON" : "OFF"));
+  Serial.println("Mode: " + String(autoMode ? "AUTO" : "MANUAL"));
+  Serial.println("WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
+  Serial.println("=====================");
+}
+
+void autoWatering() {
+  // Auto pump when soil is dry and system is connected
+  if (soilMoisture < soilThreshold && !pumpRunning && WiFi.status() == WL_CONNECTED) {
+    Serial.println("AUTO: Soil dry (" + String(soilMoisture) + "%)! Starting pump...");
+    startPump();
+  }
+}
+
+void startPump() {
+  digitalWrite(PUMP_PIN, HIGH);
+  pumpStatus = true;
+  pumpRunning = true;
+  pumpStartTime = millis();
+  Serial.println("PUMP: Started for " + String(pumpDuration/1000) + " seconds");
+  blinkLED(3);
+  
+  // Send notification to Blynk
+  Blynk.logEvent("pump_started", "Pump started - Soil: " + String(soilMoisture) + "%");
+}
+
+void stopPump() {
+  digitalWrite(PUMP_PIN, LOW);
+  pumpStatus = false;
+  pumpRunning = false;
+  Serial.println("PUMP: Stopped");
+  
+  // Send notification to Blynk
+  Blynk.logEvent("pump_stopped", "Pump stopped after " + String(pumpDuration/1000) + " seconds");
+}
+
+void blinkLED(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_PIN, LOW);  // LED ON (active low)
+    delay(200);
+    digitalWrite(LED_PIN, HIGH); // LED OFF
+    delay(200);
+  }
+}
+
+// Blynk Virtual Pin Functions
+BLYNK_WRITE(V6) { // Manual pump control
+  if (!autoMode) {
+    int value = param.asInt();
+    if (value == 1 && !pumpRunning) {
+      Serial.println("MANUAL: Pump started via app");
+      startPump();
+    } else if (value == 0 && pumpRunning) {
+      Serial.println("MANUAL: Pump stopped via app");
+      stopPump();
     }
   } else {
-    wateringStart = millis();
+    Serial.println("Cannot control pump manually - Auto mode is ON");
   }
 }
 
-void readSensors() {
-  // Read soil moisture (0-1023, lower = more wet)
-  soilValue = analogRead(SOIL_PIN);
-  int soilPercent = map(soilValue, 0, 1023, 100, 0);
- 
-  // Read DHT22
-  temp = dht.readTemperature();
-  humid = dht.readHumidity();
- 
-  // Send to Blynk
-  Blynk.virtualWrite(V0, soilPercent);     // Soil %
-  Blynk.virtualWrite(V1, temp);            // Temperature
-  Blynk.virtualWrite(V2, humid);           // Humidity  
-  Blynk.virtualWrite(V3, isPumping ? 1 : 0); // Pump status
-  Blynk.virtualWrite(V6, valveOpen ? 1 : 0); // Valve status
-  Blynk.virtualWrite(V7, servoPosition);   // Servo position
- 
-  // Print to Serial
-  Serial.println("=== SENSOR READINGS ===");
-  Serial.println("Soil: " + String(soilPercent) + "%");
-  Serial.println("Temp: " + String(temp) + "°C");
-  Serial.println("Humidity: " + String(humid) + "%");
-  Serial.println("Pump: " + String(isPumping ? "ON" : "OFF"));
-  Serial.println("Valve: " + String(valveOpen ? "OPEN" : "CLOSED"));
-  Serial.println("Servo Pos: " + String(servoPosition) + "°");
-  Serial.println("========================");
- 
-  // Warning if very dry
-  if (soilValue < 200) {
-    beep(3);
-  }
-}
-
-void startWatering() {
-  Serial.println(">>> STARTING WATERING SEQUENCE <<<");
-  
-  // Open valve first
-  openValve();
-  delay(1000); // Wait for valve to open
-  
-  // Then start pump
-  isPumping = true;
-  digitalWrite(PUMP_PIN, HIGH);
-  Serial.println(">>> PUMP ON <<<");
-  beep(1);
-}
-
-void stopWatering() {
-  Serial.println(">>> STOPPING WATERING SEQUENCE <<<");
-  
-  // Stop pump first
-  isPumping = false;
-  digitalWrite(PUMP_PIN, LOW);
-  Serial.println(">>> PUMP OFF <<<");
-  
-  delay(500); // Wait a bit
-  
-  // Then close valve
-  closeValve();
-  beep(2);
-}
-
-void openValve() {
-  valveOpen = true;
-  servoPosition = 90;
-  waterValve.write(servoPosition);
-  Serial.println(">>> VALVE OPENED <<<");
-  
-  // Update Blynk
-  Blynk.virtualWrite(V6, 1);
-  Blynk.virtualWrite(V7, servoPosition);
-}
-
-void closeValve() {
-  valveOpen = false;
-  servoPosition = 0;
-  waterValve.write(servoPosition);
-  Serial.println(">>> VALVE CLOSED <<<");
-  
-  // Update Blynk
-  Blynk.virtualWrite(V6, 0);
-  Blynk.virtualWrite(V7, servoPosition);
-}
-
-void setServoPosition(int position) {
-  // Limit position between 0-180 degrees
-  position = constrain(position, 0, 180);
-  servoPosition = position;
-  waterValve.write(servoPosition);
-  
-  // Update valve status based on position
-  valveOpen = (position > 45) ? true : false;
-  
-  Serial.println("Servo moved to: " + String(servoPosition) + "°");
-  
-  // Update Blynk
-  Blynk.virtualWrite(V6, valveOpen ? 1 : 0);
-  Blynk.virtualWrite(V7, servoPosition);
-}
-
-void beep(int times) {
-  for (int i = 0; i < times; i++) {
-    tone(BUZZER_PIN, 1000, 200);
-    delay(300);
-  }
-}
-
-// Blynk Controls
-BLYNK_WRITE(V4) { // Auto Mode Switch
+BLYNK_WRITE(V7) { // Auto/Manual mode toggle
   autoMode = param.asInt();
-  Serial.println("Auto Mode: " + String(autoMode ? "ON" : "OFF"));
+  Serial.println("Mode changed to: " + String(autoMode ? "AUTO" : "MANUAL"));
+  if (!autoMode && pumpRunning) {
+    Serial.println("Switching to manual - stopping pump");
+    stopPump(); // Stop pump when switching to manual
+  }
+}
+
+BLYNK_WRITE(V8) { // Soil threshold adjustment
+  int newThreshold = param.asInt();
+  if (newThreshold >= 10 && newThreshold <= 80) { // Reasonable range
+    soilThreshold = newThreshold;
+    Serial.println("Soil threshold set to: " + String(soilThreshold) + "%");
+  } else {
+    Serial.println("Invalid threshold value. Range: 10-80%");
+  }
+}
+
+BLYNK_WRITE(V9) { // Pump duration adjustment (in seconds)
+  int newDuration = param.asInt();
+  if (newDuration >= 1 && newDuration <= 30) { // 1-30 seconds
+    pumpDuration = newDuration * 1000; // Convert to milliseconds
+    Serial.println("Pump duration set to: " + String(newDuration) + " seconds");
+  } else {
+    Serial.println("Invalid duration. Range: 1-30 seconds");
+  }
+}
+
+// Connection status
+BLYNK_CONNECTED() {
+  Serial.println("Blynk Connected!");
+  digitalWrite(LED_PIN, HIGH); // LED OFF when connected
   
-  // If auto mode is turned off and system is watering, stop it
-  if (!autoMode && isPumping) {
-    stopWatering();
-  }
+  // Sync all virtual pins
+  Blynk.syncAll();
 }
 
-BLYNK_WRITE(V5) { // Manual Water Button
-  if (param.asInt() && !autoMode && !isPumping) {
-    startWatering();
-  }
-}
-
-BLYNK_WRITE(V8) { // Manual Valve Control (Button)
-  if (param.asInt()) {
-    if (valveOpen) {
-      closeValve();
-    } else {
-      openValve();
-    }
-  }
-}
-
-BLYNK_WRITE(V9) { // Servo Position Slider (0-180)
-  if (!autoMode) { // Only allow manual control when not in auto mode
-    int position = param.asInt();
-    setServoPosition(position);
-  }
+BLYNK_DISCONNECTED() {
+  Serial.println("Blynk Disconnected!");
+  blinkLED(5);
 }

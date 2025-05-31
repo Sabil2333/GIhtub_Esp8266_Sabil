@@ -1,0 +1,150 @@
+/*
+  SMART FARMING - BLYNK IoT SYSTEM
+  ================================
+  
+  Komponen:
+  - ESP8266 (NodeMCU)
+  - Soil Moisture Sensor → A0
+  - Water Pump Relay → D1
+  - Buzzer → D2
+  
+  Install Library:
+  - Blynk by Volodymyr Shymanskyy
+  
+  Setup Blynk App:
+  - Gauge Widget (V0) - Soil Moisture %
+  - Button Widget (V1) - Manual Pump Control
+  - LED Widget (V2) - Pump Status
+  - Notification Widget
+*/
+
+#define BLYNK_TEMPLATE_ID "YOUR_TEMPLATE_ID"
+#define BLYNK_DEVICE_NAME "Smart Farm"
+#define BLYNK_AUTH_TOKEN "YOUR_AUTH_TOKEN"
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+
+// WiFi & Blynk
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "NAMA_WIFI_ANDA";
+char pass[] = "PASSWORD_WIFI_ANDA";
+
+// Pins
+const int SOIL_PIN = A0;
+const int PUMP_PIN = D1;
+const int BUZZER_PIN = D2;
+
+// Settings
+const int DRY_LIMIT = 700;
+const int PUMP_TIME = 3000;
+const int COOLDOWN = 30000;
+
+// Variables
+int soilValue = 0;
+int moisturePercent = 0;
+bool pumpRunning = false;
+bool autoMode = true;
+unsigned long pumpStart = 0;
+unsigned long lastWatering = 0;
+
+BlynkerTimer timer;
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN, LOW);
+  
+  Blynk.begin(auth, ssid, pass);
+  
+  // Setup timers
+  timer.setInterval(2000L, readSensor);
+  timer.setInterval(5000L, checkWatering);
+  
+  Serial.println("Smart Farming with Blynk Started!");
+  beep(2, 200);
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+  
+  // Stop pump after duration
+  if (pumpRunning && (millis() - pumpStart >= PUMP_TIME)) {
+    stopPump();
+  }
+}
+
+void readSensor() {
+  soilValue = analogRead(SOIL_PIN);
+  moisturePercent = map(soilValue, 1024, 300, 0, 100);
+  moisturePercent = constrain(moisturePercent, 0, 100);
+  
+  // Send to Blynk
+  Blynk.virtualWrite(V0, moisturePercent);
+  
+  Serial.print("Moisture: ");
+  Serial.print(moisturePercent);
+  Serial.println("%");
+}
+
+void checkWatering() {
+  if (autoMode && 
+      soilValue > DRY_LIMIT && 
+      !pumpRunning && 
+      (millis() - lastWatering > COOLDOWN)) {
+    
+    startPump();
+    Blynk.logEvent("low_moisture", "Soil is dry! Auto watering started.");
+  }
+}
+
+void startPump() {
+  digitalWrite(PUMP_PIN, HIGH);
+  pumpRunning = true;
+  pumpStart = millis();
+  lastWatering = millis();
+  
+  Blynk.virtualWrite(V2, 255); // LED ON
+  beep(3, 200);
+  
+  Serial.println("PUMP ON");
+}
+
+void stopPump() {
+  digitalWrite(PUMP_PIN, LOW);
+  pumpRunning = false;
+  
+  Blynk.virtualWrite(V2, 0); // LED OFF
+  beep(1, 500);
+  
+  Serial.println("PUMP OFF");
+}
+
+// Manual pump control from Blynk app
+BLYNK_WRITE(V1) {
+  int buttonState = param.asInt();
+  
+  if (buttonState == 1 && !pumpRunning) {
+    startPump();
+    Blynk.logEvent("manual_water", "Manual watering activated!");
+  }
+}
+
+// Auto mode toggle
+BLYNK_WRITE(V3) {
+  autoMode = param.asInt();
+  Serial.print("Auto Mode: ");
+  Serial.println(autoMode ? "ON" : "OFF");
+}
+
+void beep(int times, int duration) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(duration);
+    digitalWrite(BUZZER_PIN, LOW);
+    if (i < times - 1) delay(200);
+  }
+}
